@@ -6,6 +6,9 @@ import plotly.express as px
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import numpy as np
+from deap import base, creator, tools, algorithms
+import altair as alt
+import time
 
 # Define the forward model for regression data
 class ForwardModel(nn.Module):
@@ -40,7 +43,7 @@ def train_regression_model(X_train, y_train, input_dim, output_dim, epochs=1000)
 
     return model
 
-# Function to perform inverse modeling for regression data
+# Function to perform inverse modeling using gradient-based optimization
 def inverse_model_regression(model, target, initial_input, num_iterations=1000, learning_rate=0.01):
     criterion = nn.MSELoss()
     target_tensor = torch.tensor(target, dtype=torch.float32).view(-1, 1)
@@ -56,8 +59,36 @@ def inverse_model_regression(model, target, initial_input, num_iterations=1000, 
 
     return input_tensor.detach().numpy()
 
-def show():
+# Function to perform inverse modeling using genetic algorithm
+def inverse_model_genetic(model, target, initial_input, num_generations=100, population_size=50):
+    def evaluate(individual):
+        input_tensor = torch.tensor(individual, dtype=torch.float32).view(1, -1)
+        output = model(input_tensor).detach().numpy()
+        loss = np.mean((output - target) ** 2)
+        return loss,
 
+    # DEAP setup
+    creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+    creator.create("Individual", list, fitness=creator.FitnessMin)
+
+    toolbox = base.Toolbox()
+    toolbox.register("attr_float", np.random.uniform, -1, 1)
+    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=len(initial_input))
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+    toolbox.register("mate", tools.cxBlend, alpha=0.5)
+    toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=1, indpb=0.2)
+    toolbox.register("select", tools.selTournament, tournsize=3)
+    toolbox.register("evaluate", evaluate)
+
+    population = toolbox.population(n=population_size)
+    halloffame = tools.HallOfFame(1)
+
+    algorithms.eaSimple(population, toolbox, cxpb=0.5, mutpb=0.2, ngen=num_generations, halloffame=halloffame, verbose=False)
+
+    return np.array(halloffame[0])
+
+def show():
     # Streamlit app
     st.title("Capacity Planning using Neural Networks")
 
@@ -68,6 +99,9 @@ def show():
         df = pd.read_csv(uploaded_file)
         df = df.drop(df.columns[0], axis=1)
         st.write(df.head())
+
+        fig = px.scatter_matrix(df)
+        st.plotly_chart(fig)
 
         # Display Data Statistics
         st.subheader("Data Statistics")
@@ -80,10 +114,24 @@ def show():
         st.plotly_chart(fig_corr)
 
         # Feature Selector for Visualization
-        feature = st.selectbox('Select a feature for visualization', df.columns[:-1])
+        feature = st.selectbox('Select a feature for visualization', df.columns)
         st.write(f'You selected: {feature}')
-        fig_feature = px.scatter(df, x=feature, y=df.columns[-1])
-        st.plotly_chart(fig_feature)
+
+        # Altair scatter plot
+        scatter = alt.Chart(df).mark_circle().encode(
+            x=feature,
+            y=df.columns[-1],
+            tooltip=[feature, df.columns[-1]]
+        ).interactive()
+
+        st.altair_chart(scatter, use_container_width=True)
+
+        # Beta expander for explanation
+        with st.expander("See explanation"):
+            st.write("""
+                This scatter plot shows the relationship between the selected feature and the target variable.
+                You can zoom and pan the plot, and you can hover over the points to see their values.
+            """)
 
         target_value = st.number_input("Target Value", value=0.0)
 
@@ -146,46 +194,63 @@ def show():
             st.write(f"Training MSE: {st.session_state['train_mse']:.4f}")
             st.write(f"Test MSE: {st.session_state['test_mse']:.4f}")
 
+            optimization_method = st.selectbox('Select Optimization Method', ['Gradient-based', 'Genetic Algorithm'])
+
             if st.button("Optimize Inputs"):
                 # Perform inverse modeling
                 desired_target = st.session_state['scaler_y'].transform([[target_value]])
                 initial_input = torch.mean(torch.tensor(st.session_state['X_train'], dtype=torch.float32), dim=0).numpy()
-                optimized_inputs = inverse_model_regression(st.session_state['forward_model'], desired_target, initial_input)
-                optimized_input_2D = optimized_inputs.reshape(1, -1)
+
+                if optimization_method == 'Gradient-based':
+                    optimized_inputs = inverse_model_regression(st.session_state['forward_model'], desired_target, initial_input)
+                elif optimization_method == 'Genetic Algorithm':
+                    optimized_inputs = inverse_model_genetic(st.session_state['forward_model'], desired_target, initial_input)
+
+                optimized_input_2D = np.array(optimized_inputs).reshape(1, -1)
                 optimized_inputs_original_scale = st.session_state['scaler_X'].inverse_transform(optimized_input_2D)
 
                 st.session_state['optimized_inputs'] = optimized_inputs
                 st.session_state['optimized_inputs_original_scale'] = optimized_inputs_original_scale
                 st.session_state['desired_target'] = st.session_state['scaler_y'].inverse_transform(desired_target)
 
-                st.write("Optimized Inputs to achieve the target:")
-                st.write(optimized_inputs_original_scale)
+        if st.session_state['optimized_inputs'] is not None:
+            st.subheader("Simulation Results")
+            st.write("Optimized Inputs to achieve the target:")
+            st.write(st.session_state['optimized_inputs_original_scale'])
 
-        if st.session_state['optimized_inputs_original_scale'] is not None:
-            y_test_original_scale = st.session_state['scaler_y'].inverse_transform(st.session_state['y_test'].reshape(-1, 1)).flatten()
-            fig = px.scatter(x=st.session_state['X_test'][:, 0], y=y_test_original_scale, labels={'x': 'Feature 1', 'y': 'Target'})
-            fig.add_scatter(x=st.session_state['optimized_inputs_original_scale'][0], y=st.session_state['desired_target'][0], mode='markers',
-                            marker=dict(color='red', size=12), name='Optimized Input')
-            st.plotly_chart(fig)
-
-        # Add a slider for simulation
-        if st.session_state['forward_model'] is not None:
+            # Add a slider for simulation
             st.header("Simulation")
             input_sliders = []
             for i in range(st.session_state['input_dim']):
-                input_sliders.append(st.slider(f'Input {i+1}', float(st.session_state['X_train'][:, i].min()), float(st.session_state['X_train'][:, i].max()), float(st.session_state['X_train'][:, i].mean())))
+                input_sliders.append(st.slider(f'Input {i+1}',
+                                               float(np.min(st.session_state['data'].iloc[:, i])),
+                                               float(np.max(st.session_state['data'].iloc[:, i])),
+                                               float(st.session_state['optimized_inputs_original_scale'][0, i])))
 
-            if st.button("Simulate"):
-                input_values = torch.tensor(input_sliders, dtype=torch.float32).unsqueeze(0)
-                model_output = st.session_state['forward_model'](input_values).detach().numpy()
-                model_output_original_scale = st.session_state['scaler_y'].inverse_transform(model_output)
-                st.write(f"Predicted Output: {model_output_original_scale[0][0]}")
+            simulated_inputs = np.array(input_sliders).reshape(1, -1)
+            scaled_simulated_inputs = st.session_state['scaler_X'].transform(simulated_inputs)
+            simulated_output = st.session_state['forward_model'](torch.tensor(scaled_simulated_inputs, dtype=torch.float32)).detach().numpy()
+            simulated_output_original_scale = st.session_state['scaler_y'].inverse_transform(simulated_output)
+            y_test_2d = st.session_state['y_test'].reshape(-1, 1)
+            y_test_rescaled = st.session_state['scaler_y'].inverse_transform(y_test_2d)
+            st.write("Simulated Output:")
+            st.write(simulated_output_original_scale[0][0])
+            # Flatten 'y_test_rescaled' to a 1D array
+            y_test_rescaled_1D = y_test_rescaled.flatten()
 
-                y_train_original_scale = st.session_state['scaler_y'].inverse_transform(st.session_state['y_train'].reshape(-1, 1)).flatten()
-                # Update scatter plot with new input
-                fig = px.scatter(x=st.session_state['X_train'][:, 0], y=y_train_original_scale, labels={'x': 'Feature 1', 'y': 'Target'})
-                fig.add_scatter(x=[input_values[0][0].item()], y=[model_output_original_scale[0][0]], mode='markers',
-                                marker=dict(color='blue', size=12), name='Simulated Input')
-                fig.add_scatter(x=st.session_state['optimized_inputs_original_scale'][0], y=st.session_state['desired_target'][0], mode='markers',
-                                marker=dict(color='red', size=12), name='Optimized Input')
-                st.plotly_chart(fig)
+            # Scatter plot of optimized inputs
+            fig_optimized = px.scatter(x=st.session_state['X_test'][:, 0], y=y_test_rescaled_1D,
+                                       labels={'x': 'Feature 1', 'y': 'Target'})
+            fig_optimized.add_scatter(x=st.session_state['optimized_inputs_original_scale'][0],
+                                      y=st.session_state['desired_target'][0], mode='markers',
+                                      marker=dict(color='red', size=12), name='Optimized Input')
+            st.plotly_chart(fig_optimized)
+
+            # Scatter plot of simulated inputs
+            fig_simulated = px.scatter(x=st.session_state['X_test'][:, 0], y=y_test_rescaled_1D,
+                                       labels={'x': 'Feature 1', 'y': 'Target'})
+            fig_simulated.add_scatter(x=simulated_inputs[0], y=simulated_output_original_scale[0], mode='markers',
+                                      marker=dict(color='blue', size=12), name='Simulated Input')
+            st.plotly_chart(fig_simulated)
+
+
