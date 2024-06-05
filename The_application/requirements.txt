@@ -10,3 +10,4 @@ deap
 joblib
 Pillow
 requests
+io
