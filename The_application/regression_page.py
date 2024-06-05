@@ -133,7 +133,7 @@ def show():
                 You can zoom and pan the plot, and you can hover over the points to see their values.
             """)
 
-        target_value = st.number_input("Target Value", value=0.0)
+        target_value = st.number_input("Target Value", value=200.0)
 
         if 'forward_model' not in st.session_state:
             st.session_state['data'] = df

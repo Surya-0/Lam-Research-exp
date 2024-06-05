@@ -149,8 +149,8 @@ def show():
             data = Data(x=node_features, edge_index=edge_index, y=y)
             shape = data.x.shape[0]
             data.train_mask = torch.arange(1200)
-            data.val_mask = torch.arange(1200,1800)
-            data.test_mask = torch.arange(1800,2200)
+            data.val_mask = torch.arange(800,1400)
+            data.test_mask = torch.arange(1400,2200)
 
             model = train_graph_model(data)
             st.session_state['model'] = model
