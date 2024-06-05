@@ -124,6 +124,7 @@ def inverse_model_optimization(model, target_value, data, node_idx, method, epoc
         return inverse_model.optimize_inputs_genetic(target_output, data, node_idx)
 
 def show():
+    st.title("Capacity Planning using Graph Neural Networks")
     st.header("Upload Graph Data")
     uploaded_nodes_file = st.file_uploader("Choose a CSV file for Nodes", type="csv")
     uploaded_edges_file = st.file_uploader("Choose a CSV file for Edges", type="csv")
