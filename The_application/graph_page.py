@@ -127,7 +127,7 @@ def show():
     st.header("Upload Graph Data")
     uploaded_nodes_file = st.file_uploader("Choose a CSV file for Nodes", type="csv")
     uploaded_edges_file = st.file_uploader("Choose a CSV file for Edges", type="csv")
-    target_value = st.number_input("Target Value", value=0.0)
+    target_value = st.number_input("Target Value", value=2.5)
     node_idx = st.number_input("Node Index to Optimize", min_value=0, step=1, value=0)
     optimization_method = st.selectbox('Select Optimization Method', ['Gradient-based', 'Genetic Algorithm'])
 

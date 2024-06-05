@@ -191,8 +191,8 @@ def show():
             st.write(f"Test MSE: {test_mse:.4f}")
 
         if st.session_state['forward_model'] is not None:
-            st.write(f"Training MSE: {st.session_state['train_mse']:.4f}")
-            st.write(f"Test MSE: {st.session_state['test_mse']:.4f}")
+        #     st.write(f"Training MSE: {st.session_state['train_mse']:.4f}")
+        #     st.write(f"Test MSE: {st.session_state['test_mse']:.4f}")
 
             optimization_method = st.selectbox('Select Optimization Method', ['Gradient-based', 'Genetic Algorithm'])
 
