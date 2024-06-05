@@ -9,7 +9,7 @@ def load_lottie_file(filepath: str):
         return json.load(f)
 
 # Load local Lottie animation
-lottie_animation = load_lottie_file("Animation - 1717478064445.json")
+lottie_animation = load_lottie_file("Animation.json")
 
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Home", "Regression Data", "Graph Data"])
