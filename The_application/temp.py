@@ -10,7 +10,6 @@ from deap import base, creator, tools, algorithms
 import altair as alt
 import time
 
-
 # Define the forward model for regression data
 class ForwardModel(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -24,7 +23,6 @@ class ForwardModel(nn.Module):
         x = torch.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-
 
 # Function to train the regression forward model
 def train_regression_model(X_train, y_train, input_dim, output_dim, epochs=1000):
@@ -45,46 +43,9 @@ def train_regression_model(X_train, y_train, input_dim, output_dim, epochs=1000)
 
     return model
 
-
 # Function to perform inverse modeling using gradient-based optimization with constraints
-# def inverse_model_regression(model, target, initial_input, num_iterations=1000, learning_rate=0.01, input_constraints=None):
-#     criterion = nn.MSELoss()
-#     target_tensor = torch.tensor(target, dtype=torch.float32).view(-1, 1)
-#     input_tensor = torch.tensor(initial_input, dtype=torch.float32, requires_grad=True)
-#     optimizer = optim.Adam([input_tensor], lr=learning_rate)
-#
-#     for i in range(num_iterations):
-#         optimizer.zero_grad()
-#         output = model(input_tensor)
-#         loss = criterion(output, target_tensor)
-#         loss.backward()
-#         optimizer.step()
-#
-#         # Apply constraints
-#         if input_constraints:
-#             input_tensor.data = torch.clamp(input_tensor.data, input_constraints[0], input_constraints[1])
-#
-#     return input_tensor.detach().numpy()
-
-# Function to perform inverse modeling using gradient-based optimization with individual constraints
-# Custom loss function with penalty term
-def custom_loss(output, target, input_tensor, input_constraints, penalty_weight=10.0):
+def inverse_model_regression(model, target, initial_input, num_iterations=1000, learning_rate=0.01, input_constraints=None):
     criterion = nn.MSELoss()
-    mse_loss = criterion(output, target)
-    penalty = 0.0
-
-    for j in range(len(input_constraints)):
-        if input_tensor[j] < input_constraints[j][0]:
-            penalty += (input_constraints[j][0] - input_tensor[j]) ** 2
-        elif input_tensor[j] > input_constraints[j][1]:
-            penalty += (input_tensor[j] - input_constraints[j][1]) ** 2
-
-    return mse_loss + penalty_weight * penalty
-
-
-# Function to perform inverse modeling using gradient-based optimization with individual constraints and custom loss
-# function
-def inverse_model_regression(model, target, initial_input, input_constraints, num_iterations=1000, learning_rate=0.01):
     target_tensor = torch.tensor(target, dtype=torch.float32).view(-1, 1)
     input_tensor = torch.tensor(initial_input, dtype=torch.float32, requires_grad=True)
     optimizer = optim.Adam([input_tensor], lr=learning_rate)
@@ -92,19 +53,18 @@ def inverse_model_regression(model, target, initial_input, input_constraints, nu
     for i in range(num_iterations):
         optimizer.zero_grad()
         output = model(input_tensor)
-        loss = custom_loss(output, target_tensor, input_tensor, input_constraints)
+        loss = criterion(output, target_tensor)
         loss.backward()
         optimizer.step()
 
-        # Apply individual constraints
-        for j in range(len(input_constraints)):
-            input_tensor.data[j] = torch.clamp(input_tensor.data[j], input_constraints[j][0], input_constraints[j][1])
+        # Apply constraints
+        if input_constraints:
+            input_tensor.data = torch.clamp(input_tensor.data, input_constraints[0], input_constraints[1])
 
     return input_tensor.detach().numpy()
 
-
-# Function to perform inverse modeling using genetic algorithm
-def inverse_model_genetic(model, target, initial_input, num_generations=100, population_size=50):
+# Function to perform inverse modeling using genetic algorithm with constraints
+def inverse_model_genetic(model, target, initial_input, num_generations=100, population_size=50, input_constraints=None):
     def evaluate(individual):
         input_tensor = torch.tensor(individual, dtype=torch.float32).view(1, -1)
         output = model(input_tensor).detach().numpy()
@@ -116,7 +76,7 @@ def inverse_model_genetic(model, target, initial_input, num_generations=100, pop
     creator.create("Individual", list, fitness=creator.FitnessMin)
 
     toolbox = base.Toolbox()
-    toolbox.register("attr_float", np.random.uniform, -1, 1)
+    toolbox.register("attr_float", np.random.uniform, input_constraints[0], input_constraints[1])
     toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=len(initial_input))
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
@@ -128,11 +88,9 @@ def inverse_model_genetic(model, target, initial_input, num_generations=100, pop
     population = toolbox.population(n=population_size)
     halloffame = tools.HallOfFame(1)
 
-    algorithms.eaSimple(population, toolbox, cxpb=0.5, mutpb=0.2, ngen=num_generations, halloffame=halloffame,
-                        verbose=False)
+    algorithms.eaSimple(population, toolbox, cxpb=0.5, mutpb=0.2, ngen=num_generations, halloffame=halloffame, verbose=False)
 
     return np.array(halloffame[0])
-
 
 def show():
     # Streamlit app
@@ -180,15 +138,7 @@ def show():
             """)
 
         target_value = st.number_input("Target Value", value=200.0)
-        # input_constraints = st.slider('Input Constraints', 0.0, 1.0, (0.2, 0.8), step=0.01)
-        # Adding input constraints for each input parameter
-        num_features = df.shape[1] - 1
-        input_constraints = []
-        for i in range(num_features):
-            min_val = float(df.iloc[:, i].min())
-            max_val = float(df.iloc[:, i].max())
-            constraint = st.slider(f'Input {i + 1} Constraints', min_val, max_val, (min_val, max_val), step=0.01)
-            input_constraints.append(constraint)
+        input_constraints = st.slider('Input Constraints', 0.0, 1.0, (0.2, 0.8), step=0.01)
 
         if 'forward_model' not in st.session_state:
             st.session_state['data'] = df
@@ -246,23 +196,17 @@ def show():
             st.write(f"Test MSE: {test_mse:.4f}")
 
         if st.session_state['forward_model'] is not None:
-            #     st.write(f"Training MSE: {st.session_state['train_mse']:.4f}")
-            #     st.write(f"Test MSE: {st.session_state['test_mse']:.4f}")
-
             optimization_method = st.selectbox('Select Optimization Method', ['Gradient-based', 'Genetic Algorithm'])
 
             if st.button("Optimize Inputs"):
                 # Perform inverse modeling
                 desired_target = st.session_state['scaler_y'].transform([[target_value]])
-                initial_input = torch.mean(torch.tensor(st.session_state['X_train'], dtype=torch.float32),
-                                           dim=0).numpy()
+                initial_input = torch.mean(torch.tensor(st.session_state['X_train'], dtype=torch.float32), dim=0).numpy()
 
                 if optimization_method == 'Gradient-based':
-                    optimized_inputs = inverse_model_regression(st.session_state['forward_model'], desired_target,
-                                                                initial_input, input_constraints=input_constraints)
+                    optimized_inputs = inverse_model_regression(st.session_state['forward_model'], desired_target, initial_input, input_constraints=input_constraints)
                 elif optimization_method == 'Genetic Algorithm':
-                    optimized_inputs = inverse_model_genetic(st.session_state['forward_model'], desired_target,
-                                                             initial_input)
+                    optimized_inputs = inverse_model_genetic(st.session_state['forward_model'], desired_target, initial_input, input_constraints=input_constraints)
 
                 optimized_input_2D = np.array(optimized_inputs).reshape(1, -1)
                 optimized_inputs_original_scale = st.session_state['scaler_X'].inverse_transform(optimized_input_2D)
@@ -280,15 +224,14 @@ def show():
             st.header("Simulation")
             input_sliders = []
             for i in range(st.session_state['input_dim']):
-                input_sliders.append(st.slider(f'Input {i + 1}',
+                input_sliders.append(st.slider(f'Input {i+1}',
                                                float(np.min(st.session_state['data'].iloc[:, i])),
                                                float(np.max(st.session_state['data'].iloc[:, i])),
                                                float(st.session_state['optimized_inputs_original_scale'][0, i])))
 
             simulated_inputs = np.array(input_sliders).reshape(1, -1)
             scaled_simulated_inputs = st.session_state['scaler_X'].transform(simulated_inputs)
-            simulated_output = st.session_state['forward_model'](
-                torch.tensor(scaled_simulated_inputs, dtype=torch.float32)).detach().numpy()
+            simulated_output = st.session_state['forward_model'](torch.tensor(scaled_simulated_inputs, dtype=torch.float32)).detach().numpy()
             simulated_output_original_scale = st.session_state['scaler_y'].inverse_transform(simulated_output)
             y_test_2d = st.session_state['y_test'].reshape(-1, 1)
             y_test_rescaled = st.session_state['scaler_y'].inverse_transform(y_test_2d)
@@ -300,12 +243,8 @@ def show():
             # Scatter plot of optimized inputs
             fig_optimized = px.scatter(x=st.session_state['X_test'][:, 0], y=y_test_rescaled_1D,
                                        labels={'x': 'Feature 1', 'y': 'Target'})
-            # fig_optimized.add_scatter(x=st.session_state['optimized_inputs_original_scale'][0],
-            #                           y=st.session_state['desired_target'][0], mode='markers',
-            #                           marker=dict(color='red', size=12), name='Optimized Input')
-
             fig_optimized.add_scatter(x=st.session_state['optimized_inputs_original_scale'][0],
-                                      y=simulated_output_original_scale[0], mode='markers',
+                                      y=st.session_state['desired_target'][0], mode='markers',
                                       marker=dict(color='red', size=12), name='Optimized Input')
             st.plotly_chart(fig_optimized)
 
