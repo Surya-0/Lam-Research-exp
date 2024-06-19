@@ -8,6 +8,13 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 from deap import base, creator, tools, algorithms
 import altair as alt
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.operators.sampling.lhs import LHS
+from pymoo.operators.crossover.pcx import PCX
+from pymoo.operators.mutation.pm import PM
+from sklearn.ensemble import IsolationForest
 import time
 
 
@@ -81,6 +88,53 @@ def inverse_model_regression(model, target, initial_input, input_constraints, nu
     return input_tensor.detach().numpy()
 
 
+# Function to perform multi-objective optimization using pymoo
+class CapacityPlanningProblem(ElementwiseProblem):
+    def __init__(self, model, targets, input_constraints):
+        self.model = model
+        self.targets = targets
+        self.input_constraints = input_constraints
+        super().__init__(n_var=len(input_constraints),
+                         n_obj=4,  # We have 4 objectives now
+                         n_constr=0,
+                         xl=[c[0] for c in input_constraints],
+                         xu=[c[1] for c in input_constraints])
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        input_tensor = torch.tensor(x, dtype=torch.float32).view(1, -1)
+        output = self.model(input_tensor).detach().numpy().flatten()
+
+        # Assuming the first two features are to be maximized
+        loss_max1 = -output[0]  # Negative because we are maximizing
+        loss_max2 = -output[1]
+
+        # Assuming the next two features are to be minimized
+        loss_min1 = output[2]
+        loss_min2 = output[3]
+
+        out["F"] = [loss_max1, loss_max2, loss_min1, loss_min2]
+
+
+def multi_objective_optimization(model, targets, initial_input, input_constraints, n_gen=100):
+    problem = CapacityPlanningProblem(model, targets, input_constraints)
+
+    algorithm = NSGA2(
+        pop_size=100,
+        sampling=LHS(),
+        crossover=PCX(),
+        mutation=PM(),
+        eliminate_duplicates=True
+    )
+
+    res = minimize(problem,
+                   algorithm,
+                   ('n_gen', n_gen),
+                   seed=1,
+                   verbose=True)
+
+    return res.X, res.F
+
+
 # Function to perform inverse modeling using genetic algorithm
 def inverse_model_genetic(model, target, initial_input, num_generations=100, population_size=50):
     def evaluate(individual):
@@ -110,6 +164,14 @@ def inverse_model_genetic(model, target, initial_input, num_generations=100, pop
                         verbose=False)
 
     return np.array(halloffame[0])
+
+
+# Function to detect anomalies using Isolation Forest
+def detect_anomalies(data, contamination=0.05):
+    model = IsolationForest(contamination=contamination)
+    model.fit(data)
+    anomalies = model.predict(data)
+    return anomalies
 
 
 def show():
@@ -157,6 +219,15 @@ def show():
                 You can zoom and pan the plot, and you can hover over the points to see their values.
             """)
 
+        target_value = st.number_input("Target Value", value=200.0)
+        num_features = df.shape[1] - 1
+        input_constraints = []
+        for i in range(num_features):
+            min_val = float(df.iloc[:, i].min())
+            max_val = float(df.iloc[:, i].max())
+            constraint = st.slider(f'Input {i + 1} Constraints', min_val, max_val, (min_val, max_val), step=0.01)
+            input_constraints.append(constraint)
+
         if 'forward_model' not in st.session_state:
             st.session_state['data'] = df
             st.session_state['X_train'] = None
@@ -172,10 +243,6 @@ def show():
             st.session_state['test_mse'] = None
 
         if st.button("Run Model"):
-            st.header("Training the Model")
-            st.write("Splitting the data into training and testing sets, and scaling the data...")
-
-            # Split the data
             X = df.iloc[:, :-1].values
             y = df.iloc[:, -1].values
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -186,12 +253,10 @@ def show():
             y_train = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
             y_test = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
 
-            # Train the forward model
             input_dim = X_train.shape[1]
             output_dim = 1
             forward_model = train_regression_model(X_train, y_train, input_dim, output_dim)
 
-            # Save model and data in session state
             st.session_state['X_train'] = X_train
             st.session_state['X_test'] = X_test
             st.session_state['y_train'] = y_train
@@ -202,9 +267,7 @@ def show():
             st.session_state['input_dim'] = input_dim
             st.session_state['output_dim'] = output_dim
 
-            # Display Model Performance Metrics
             st.subheader("Model Performance Metrics")
-            st.write("Evaluating model performance on training and testing data...")
             train_predictions = forward_model(torch.tensor(X_train, dtype=torch.float32)).detach().numpy()
             train_mse = np.mean((train_predictions - y_train.reshape(-1, 1)) ** 2)
             test_predictions = forward_model(torch.tensor(X_test, dtype=torch.float32)).detach().numpy()
@@ -216,29 +279,11 @@ def show():
             st.write(f"Training MSE: {train_mse:.4f}")
             st.write(f"Test MSE: {test_mse:.4f}")
 
-            st.session_state['model_trained'] = True
-
-        if st.session_state.get('model_trained'):
-            target_value = st.number_input("Target Value", value=200.0)
-
-            st.header("Optimization")
-            st.write(
-                "Now you can set input constraints, select the optimization method, and optimize the inputs to achieve the desired target.")
-
-            # Input constraints sliders
-            input_constraints = []
-            for i in range(st.session_state['input_dim']):
-                min_val = float(df.iloc[:, i].min())
-                max_val = float(df.iloc[:, i].max())
-                constraint = st.slider(f'Input {i + 1} Constraints', min_val, max_val, (min_val, max_val), step=0.01)
-                input_constraints.append(constraint)
-
-            # Select optimization method
-            optimization_method = st.selectbox('Select Optimization Method', ['Gradient-based', 'Genetic Algorithm'])
+        if st.session_state['forward_model'] is not None:
+            optimization_method = st.selectbox('Select Optimization Method',
+                                               ['Gradient-based', 'Genetic Algorithm', 'Multi-objective'])
 
             if st.button("Optimize Inputs"):
-                st.write("Optimizing inputs to achieve the desired target...")
-                # Perform inverse modeling
                 desired_target = st.session_state['scaler_y'].transform([[target_value]])
                 initial_input = torch.mean(torch.tensor(st.session_state['X_train'], dtype=torch.float32),
                                            dim=0).numpy()
@@ -249,6 +294,10 @@ def show():
                 elif optimization_method == 'Genetic Algorithm':
                     optimized_inputs = inverse_model_genetic(st.session_state['forward_model'], desired_target,
                                                              initial_input)
+                elif optimization_method == 'Multi-objective':
+                    targets = [desired_target.flatten(), 100]  # Example: Target value and another objective like cost
+                    optimized_inputs, _ = multi_objective_optimization(st.session_state['forward_model'], targets,
+                                                                       initial_input, input_constraints)
 
                 optimized_input_2D = np.array(optimized_inputs).reshape(1, -1)
                 optimized_inputs_original_scale = st.session_state['scaler_X'].inverse_transform(optimized_input_2D)
@@ -257,15 +306,12 @@ def show():
                 st.session_state['optimized_inputs_original_scale'] = optimized_inputs_original_scale
                 st.session_state['desired_target'] = st.session_state['scaler_y'].inverse_transform(desired_target)
 
-        if st.session_state.get('optimized_inputs') is not None:
+        if st.session_state['optimized_inputs'] is not None:
             st.subheader("Simulation Results")
-            st.write("Here are the optimized inputs to achieve the target:")
+            st.write("Optimized Inputs to achieve the target:")
             st.write(st.session_state['optimized_inputs_original_scale'])
 
             st.header("Simulation")
-            st.write("You can use the sliders to simulate different inputs and observe the output.")
-
-            # Simulation sliders
             input_sliders = []
             for i in range(st.session_state['input_dim']):
                 input_sliders.append(st.slider(f'Input {i + 1}',
@@ -284,18 +330,26 @@ def show():
             st.write(simulated_output_original_scale[0][0])
             y_test_rescaled_1D = y_test_rescaled.flatten()
 
-            # Scatter plot of optimized inputs
             fig_optimized = px.scatter(x=st.session_state['X_test'][:, 0], y=y_test_rescaled_1D,
                                        labels={'x': 'Feature 1', 'y': 'Target'})
             fig_optimized.add_scatter(x=st.session_state['optimized_inputs_original_scale'][0],
-                                      y=st.session_state['desired_target'][0], mode='markers',
+                                      y=simulated_output_original_scale[0], mode='markers',
                                       marker=dict(color='red', size=12), name='Optimized Input')
             st.plotly_chart(fig_optimized)
 
-            # Scatter plot of simulated inputs
             fig_simulated = px.scatter(x=st.session_state['X_test'][:, 0], y=y_test_rescaled_1D,
                                        labels={'x': 'Feature 1', 'y': 'Target'})
             fig_simulated.add_scatter(x=simulated_inputs[0], y=simulated_output_original_scale[0], mode='markers',
                                       marker=dict(color='blue', size=12), name='Simulated Input')
             st.plotly_chart(fig_simulated)
+
+        if st.button("Detect Anomalies"):
+            X = st.session_state['X_train']
+            anomalies = detect_anomalies(X)
+            st.write(f"Number of anomalies detected: {sum(anomalies == -1)}")
+
+        # if st.button("Show Real-Time Dashboard"):
+        #     st.write("This is where you can implement a real-time dashboard with Streamlit")
+        #     st.write("Use the Streamlit's real-time capabilities to monitor key metrics and visualize trends.")
+
 
