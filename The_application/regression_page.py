@@ -219,12 +219,14 @@ def show():
             st.session_state['model_trained'] = True
 
         if st.session_state.get('model_trained'):
-            target_value = st.number_input("Target Value", value=200.0)
+
 
             st.header("Optimization")
             st.write(
                 "Now you can set input constraints, select the optimization method, and optimize the inputs to achieve the desired target.")
 
+            # Target value to optimize
+            target_value = st.number_input("Target Value", value=200.0)
             # Input constraints sliders
             input_constraints = []
             for i in range(st.session_state['input_dim']):
