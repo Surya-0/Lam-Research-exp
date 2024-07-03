@@ -1,6 +1,6 @@
-streamlit_lottie
 streamlit
-bs4
+streamlit-lottie
+beautifulsoup4
 pandas
 torch
 torch-geometric
@@ -10,4 +10,5 @@ deap
 joblib
 Pillow
 requests
-
+altair
+pymoo
