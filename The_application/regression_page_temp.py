@@ -2,14 +2,15 @@ import streamlit as st
 import pandas as pd
 import torch
 from torch import nn, optim
-import plotly.express as px
+import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-import numpy as np
-from deap import base, creator, tools, algorithms
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.optimize import minimize
+from pymoo.core.problem import ElementwiseProblem
+import plotly.express as px
 import altair as alt
 
-# Define the forward model for regression data
 class ForwardModel(nn.Module):
     def __init__(self, input_dim, layers):
         super(ForwardModel, self).__init__()
@@ -26,7 +27,6 @@ class ForwardModel(nn.Module):
         x = self.output_layer(x)
         return x
 
-# Function to train the regression forward model
 def train_regression_model(X_train, y_train, input_dim, layers, learning_rate, epochs=1000):
     model = ForwardModel(input_dim, layers)
     criterion = nn.MSELoss()
@@ -45,7 +45,6 @@ def train_regression_model(X_train, y_train, input_dim, layers, learning_rate, e
 
     return model
 
-# Custom loss function with penalty term
 def custom_loss(output, target, input_tensor, input_constraints, penalty_weight=10.0):
     criterion = nn.MSELoss()
     mse_loss = criterion(output, target)
@@ -59,7 +58,6 @@ def custom_loss(output, target, input_tensor, input_constraints, penalty_weight=
 
     return mse_loss + penalty_weight * penalty
 
-# Function to perform inverse modeling using gradient-based optimization with individual constraints and custom loss
 def inverse_model_regression(model, target, initial_input, input_constraints, num_iterations=1000, learning_rate=0.01):
     target_tensor = torch.tensor(target, dtype=torch.float32).view(-1, 1)
     input_tensor = torch.tensor(initial_input, dtype=torch.float32, requires_grad=True)
@@ -72,21 +70,20 @@ def inverse_model_regression(model, target, initial_input, input_constraints, nu
         loss.backward()
         optimizer.step()
 
-        # Apply individual constraints
         for j in range(len(input_constraints)):
             input_tensor.data[j] = torch.clamp(input_tensor.data[j], input_constraints[j][0], input_constraints[j][1])
 
     return input_tensor.detach().numpy()
 
-# Function to perform inverse modeling using genetic algorithm
 def inverse_model_genetic(model, target, initial_input, num_generations=100, population_size=50):
+    from deap import base, creator, tools, algorithms
+
     def evaluate(individual):
         input_tensor = torch.tensor(individual, dtype=torch.float32).view(1, -1)
         output = model(input_tensor).detach().numpy()
         loss = np.mean((output - target) ** 2)
         return loss,
 
-    # DEAP setup
     creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
     creator.create("Individual", list, fitness=creator.FitnessMin)
 
@@ -108,7 +105,25 @@ def inverse_model_genetic(model, target, initial_input, num_generations=100, pop
 
     return np.array(halloffame[0])
 
-# Function to handle file upload and data processing
+class MultiObjectiveOptimization(ElementwiseProblem):
+    def __init__(self, model, target, scaler_X, scaler_y, n_var, xl, xu):
+        super().__init__(n_var=n_var, n_obj=3, xl=xl, xu=xu)
+        self.model = model
+        self.target = target
+        self.scaler_X = scaler_X
+        self.scaler_y = scaler_y
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        input_tensor = torch.tensor(self.scaler_X.transform([x]), dtype=torch.float32)
+        output = self.model(input_tensor).detach().numpy()
+        target_diff = np.abs(output - self.target).flatten()[0]  # Difference from target, flattened to scalar
+
+        maximize_first_half = -np.sum(x[:len(x)//2])  # Negate to maximize
+        minimize_second_half = np.sum(x[len(x)//2:])  # Minimize
+
+        out["F"] = [target_diff, maximize_first_half, minimize_second_half]
+
+
 def handle_file_upload():
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
     if uploaded_file is not None:
@@ -118,7 +133,6 @@ def handle_file_upload():
     else:
         return None
 
-# Function to visualize data
 def visualize_data(df):
     st.write(df.head())
     fig = px.scatter_matrix(df)
@@ -148,7 +162,6 @@ def visualize_data(df):
             You can zoom and pan the plot, and you can hover over the points to see their values.
         """)
 
-# Function to configure model and train
 def configure_and_train_model(df):
     learning_rate = st.slider('Select Learning Rate', 0.0001, 0.1, 0.01, step=0.0001)
     epochs = st.slider('Select Number of Epochs', 100, 5000, 1000, step=100)
@@ -201,7 +214,6 @@ def configure_and_train_model(df):
 
         st.session_state['model_trained'] = True
 
-# Function to handle optimization
 def handle_optimization():
     if st.session_state.get('model_trained'):
         st.header("Optimization")
@@ -216,11 +228,12 @@ def handle_optimization():
             constraint = st.slider(f'Input {i + 1} Constraints', min_val, max_val, (min_val, max_val), step=0.01)
             input_constraints.append(constraint)
 
-        optimization_method = st.selectbox('Select Optimization Method', ['Gradient-based', 'Genetic Algorithm'])
+        optimization_method = st.selectbox('Select Optimization Method', ['Gradient-based', 'Genetic Algorithm', 'Multi-objective'])
 
         if st.button("Optimize Inputs"):
             st.write("Optimizing inputs to achieve the desired target...")
             desired_target = st.session_state['scaler_y'].transform([[target_value]])
+            print(desired_target," ",desired_target.shape)
             initial_input = torch.mean(torch.tensor(st.session_state['X_train'], dtype=torch.float32),
                                        dim=0).numpy()
 
@@ -230,6 +243,29 @@ def handle_optimization():
             elif optimization_method == 'Genetic Algorithm':
                 optimized_inputs = inverse_model_genetic(st.session_state['forward_model'], desired_target,
                                                          initial_input)
+            elif optimization_method == 'Multi-objective':
+                xl = np.min(st.session_state['X_train'], axis=0)
+                xu = np.max(st.session_state['X_train'], axis=0)
+
+                problem = MultiObjectiveOptimization(
+                    model=st.session_state['forward_model'],
+                    target=desired_target,
+                    scaler_X=st.session_state['scaler_X'],
+                    scaler_y=st.session_state['scaler_y'],
+                    n_var=st.session_state['input_dim'],
+                    xl=xl,
+                    xu=xu
+                )
+
+                algorithm = NSGA2(pop_size=100)
+                res = minimize(problem, algorithm, ("n_gen", 100), seed=1, verbose=False)
+
+                # st.write("Optimization Results")
+                # st.write("Pareto front solutions:")
+                # for sol in res.F:
+                    # st.write(f"Target Difference: {sol[0]:.4f}, Maximize Objective: {-sol[1]:.4f}, Minimize Objective: {sol[2]:.4f}")
+
+                optimized_inputs = res.X[0]
 
             optimized_input_2D = np.array(optimized_inputs).reshape(1, -1)
             optimized_inputs_original_scale = st.session_state['scaler_X'].inverse_transform(optimized_input_2D)
