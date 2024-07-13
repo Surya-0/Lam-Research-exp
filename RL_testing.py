@@ -5,6 +5,13 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 
 
+# As far as RL is concerned the environment is the space in which the agent operates
+# To have a functional environment there needs to be a set of actions and
+# some observations along with a reward to learn over a period of time.
+# In this case we have a simple environment where we have two input variables and a set of actions
+# to change these variables. In this code the reward is calculated as the difference between the
+# sum of maximized variables and the sum of minimized variables.
+
 class SimpleEnv(gym.Env):
     def __init__(self):
         super(SimpleEnv, self).__init__()
@@ -41,9 +48,12 @@ class SimpleEnv(gym.Env):
         self.state = self._get_initial_state()
         return self.state, {}
 
+    #
     def step(self, action):
+        # The input action is first restricted between -1 and 1
         action = np.clip(action, -1, 1)
-        scaled_action = (action + 1) / 2 * 10  # Scale action to [0, 10]
+        # This action is scaled to values in the range of 0 to 10
+        scaled_action = (action + 1) / 2 * 10
 
         # Apply constraints
         for i in range(self.input_dim):
@@ -74,7 +84,8 @@ env = SimpleEnv()
 # Check environment
 check_env(env)
 
-# Train model using PPO
+# Train model using PPO(Proximal Policy Optimization)
+# MLP policy -> Multi Layer Perceptron Policy
 model = PPO("MlpPolicy", env, verbose=1)
 model.learn(total_timesteps=10000)
 
