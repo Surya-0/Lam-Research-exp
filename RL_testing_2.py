@@ -5,41 +5,34 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 
 
-# As far as RL is concerned the environment is the space in which the agent operates
-# To have a functional environment there needs to be a set of actions and
-# some observations along with a reward to learn over a period of time.
-# In this case we have a simple environment where we have two input variables and a set of actions
-# to change these variables. In this code the reward is calculated as the difference between the
-# sum of maximized variables and the sum of minimized variables.
-
 class SimpleEnv(gym.Env):
     def __init__(self):
         super(SimpleEnv, self).__init__()
         # Number of input variables
-        self.input_dim = 2
+        self.input_dim = 4
 
         # Indices to maximize
-        self.maximize_indices = [0]
+        self.maximize_indices = [0, 1]
 
         # Indices to minimize
-        self.minimize_indices = [1]
+        self.minimize_indices = [2, 3]
 
-        # The bounds of both the variables
-        self.input_constraints = [(0, 10), (0, 10)]
+        # The bounds of all four variables
+        self.input_constraints = [(0, 10), (0, 10), (0, 10), (0, 10)]
 
         # Action space: The possible actions the agent can take in the environment
         self.action_space = spaces.Box(low=-1, high=1, shape=(self.input_dim,), dtype=np.float32)
 
-        # Observation space: The possible values each for each environment
+        # Observation space: The possible values for each environment variable
         self.observation_space = spaces.Box(low=0, high=10, shape=(self.input_dim,), dtype=np.float32)
 
-        # Initial state : Initial state of the environment
+        # Initial state: Initial state of the environment
         self.state = self._get_initial_state()
 
     # The get_initial_state function generates the initial state of the environment
-    # and generates a numpy array of the designated input size
     def _get_initial_state(self):
         initial_state = np.random.uniform(low=0, high=10, size=(self.input_dim,)).astype(np.float32)
+        print("Initial state is : ",initial_state)
         return initial_state
 
     # The reset function sets the environment's state to the initial state
@@ -48,6 +41,7 @@ class SimpleEnv(gym.Env):
         self.state = self._get_initial_state()
         return self.state, {}
 
+    # The step function applies the action, updates the state, and computes the reward
     def step(self, action):
         # The input action is first restricted between -1 and 1
         action = np.clip(action, -1, 1)
